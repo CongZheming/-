@@ -1,0 +1,17 @@
+app:
+  name: "跨平台舆情材料识别与归类系统"
+  version: "1.0.0"
+
+database:
+  path: "data/opinion_materials.db"
+
+paths:
+  screenshots: "data/screenshots"
+  output: "data/output"
+
+ocr:
+  provider: "paddleocr"
+  enabled: true
+
+classification:
+  method: "rule"
