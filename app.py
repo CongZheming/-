@@ -7,6 +7,8 @@ import pandas as pd
 import streamlit as st
 
 from database.db_manager import (
+    delete_classification,
+    delete_material,
     export_all,
     get_latest_unclassified_material,
     get_unchecked_classifications,
@@ -220,6 +222,83 @@ def page_browse() -> None:
     st.dataframe(load_classifications(), hide_index=True, use_container_width=True)
 
 
+def _format_option(row: pd.Series, id_column: str) -> str:
+    platform = row.get("platform") or "未知平台"
+    source_type = row.get("source_type") or "未知类型"
+    keyword = row.get("keyword") or "无关键词"
+    return f"{row[id_column]} | {platform} | {source_type} | {keyword}"
+
+
+def page_delete() -> None:
+    st.header("数据删除")
+    delete_message = st.session_state.pop("delete_message", None)
+    if delete_message:
+        st.success(delete_message)
+    st.warning("删除操作不可撤销。建议先在“数据导出”页面导出备份，再删除误录数据。")
+
+    material_tab, classification_tab = st.tabs(["删除材料", "删除分类记录"])
+
+    with material_tab:
+        materials = load_materials()
+        if materials.empty:
+            st.info("暂无可删除材料。")
+        else:
+            material_options = [_format_option(row, "material_id") for _, row in materials.iterrows()]
+            selected = st.selectbox("选择要删除的材料", material_options)
+            material_id = selected.split(" | ")[0]
+            selected_row = materials[materials["material_id"] == material_id].iloc[0]
+
+            st.text_area("原文预览", selected_row.get("raw_text") or "", height=140, disabled=True)
+            st.text_area("清洗文本预览", selected_row.get("clean_text") or "", height=140, disabled=True)
+
+            delete_screenshot_file = st.checkbox("同时删除 data/screenshots/ 下对应截图文件", value=False)
+            confirm_material_id = st.text_input("请输入 material_id 确认删除", key="confirm_material_id")
+            if st.button("删除该材料及其关联记录", type="primary"):
+                if confirm_material_id != material_id:
+                    st.error("确认 ID 不一致，未执行删除。")
+                    return
+                result = delete_material(material_id, delete_screenshot_file=delete_screenshot_file)
+                if result.get("deleted"):
+                    removed = "，截图文件已删除" if result.get("screenshot_file_removed") else ""
+                    st.session_state["delete_message"] = f"已删除材料 {material_id} 及其关联 OCR / 分类记录{removed}。"
+                    st.rerun()
+                else:
+                    st.error(f"删除失败：{result.get('message', '未知错误')}")
+
+    with classification_tab:
+        classifications = load_joined_dataset()
+        classifications = classifications[classifications["classification_id"].notna()] if not classifications.empty else classifications
+        if classifications.empty:
+            st.info("暂无可删除分类记录。")
+        else:
+            classification_options = [_format_option(row, "classification_id") for _, row in classifications.iterrows()]
+            selected = st.selectbox("选择要删除的分类记录", classification_options)
+            classification_id = selected.split(" | ")[0]
+            selected_row = classifications[classifications["classification_id"] == classification_id].iloc[0]
+
+            st.write(
+                {
+                    "material_id": selected_row.get("material_id"),
+                    "relevance_label": selected_row.get("relevance_label"),
+                    "emotion_label": selected_row.get("emotion_label"),
+                    "frame_label": selected_row.get("frame_label"),
+                    "reshape_type": selected_row.get("reshape_type"),
+                }
+            )
+            st.caption("只删除分类记录不会删除原始材料；该材料会重新出现在“自动识别与归类”的未分类队列中。")
+            confirm_classification_id = st.text_input("请输入 classification_id 确认删除", key="confirm_classification_id")
+            if st.button("仅删除该分类记录", type="primary"):
+                if confirm_classification_id != classification_id:
+                    st.error("确认 ID 不一致，未执行删除。")
+                    return
+                deleted_count = delete_classification(classification_id)
+                if deleted_count:
+                    st.session_state["delete_message"] = f"已删除分类记录 {classification_id}。"
+                    st.rerun()
+                else:
+                    st.error("未找到该分类记录，删除失败。")
+
+
 def page_export() -> None:
     st.header("数据导出")
     st.write("导出文件将保存到 `data/output/`。")
@@ -258,7 +337,7 @@ def main() -> None:
     st.title("跨平台舆情材料识别与归类系统")
     page = st.sidebar.radio(
         "导航",
-        ["材料上传 / 文本录入", "自动识别与归类", "人工复核", "数据浏览", "数据导出", "统计概览"],
+        ["材料上传 / 文本录入", "自动识别与归类", "人工复核", "数据浏览", "数据删除", "数据导出", "统计概览"],
     )
 
     if page == "材料上传 / 文本录入":
@@ -269,6 +348,8 @@ def main() -> None:
         page_review()
     elif page == "数据浏览":
         page_browse()
+    elif page == "数据删除":
+        page_delete()
     elif page == "数据导出":
         page_export()
     else:
