@@ -22,7 +22,7 @@ UI_NOISE_LINES = {
 
 
 def clean_text(text: str) -> str:
-    """Lightly clean social-media text while preserving research-relevant wording."""
+    """轻量清洗社交媒体文本，保留反讽、谐音、缩写和 emoji 等研究线索。"""
     if not text:
         return ""
 
