@@ -3,9 +3,12 @@ pandas>=2.0.0
 openpyxl>=3.1.0
 jieba>=0.42.1
 PyYAML>=6.0.0
+setuptools>=68.0.0
 
-# Optional OCR dependency. Install manually if screenshot OCR is needed.
-# paddleocr>=2.7.0
+# OCR dependencies. The current OCR processor uses PaddleOCR 2.x APIs.
+--extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cpu/
+paddlepaddle>=2.5.0,<3.0.0; python_version < "3.13"
+paddleocr>=2.7.0,<3.0.0; python_version < "3.13"
 
 # Optional semantic classification dependency for future versions.
 # sentence-transformers>=2.2.0
