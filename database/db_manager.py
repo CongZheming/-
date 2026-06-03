@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import sqlite3
+import json
 from pathlib import Path
 from typing import Any, Dict
 
 import pandas as pd
 
 from database.db_init import init_database as _init_database
-from modules.utils import DATABASE_PATH, SCREENSHOTS_DIR
+from modules.utils import DATABASE_PATH, SCREENSHOTS_DIR, get_current_time
 
 
 def get_connection() -> sqlite3.Connection:
@@ -39,7 +40,13 @@ def insert_material(material_dict: Dict[str, Any]) -> None:
 
 
 def insert_classification(classification_dict: Dict[str, Any]) -> None:
+    explanation_json = classification_dict.get("explanation_json")
+    if explanation_json is None:
+        explanation_json = json.dumps(classification_dict.get("explanations", {}), ensure_ascii=False)
+
     defaults = {
+        "needs_review": int(bool(classification_dict.get("needs_review", False))),
+        "explanation_json": explanation_json,
         "is_human_checked": 0,
         "final_relevance_label": classification_dict.get("relevance_label"),
         "final_content_type": classification_dict.get("content_type"),
@@ -49,20 +56,24 @@ def insert_classification(classification_dict: Dict[str, Any]) -> None:
         "final_reshape_type": classification_dict.get("reshape_type"),
     }
     payload = {**defaults, **classification_dict}
+    payload["needs_review"] = int(bool(payload.get("needs_review", False)))
+    payload["explanation_json"] = explanation_json
     with get_connection() as conn:
         conn.execute(
             """
             INSERT OR REPLACE INTO classifications (
                 classification_id, material_id, relevance_label, content_type,
                 emotion_label, frame_label, platform_role, reshape_type, confidence,
-                is_human_checked, final_relevance_label, final_content_type,
+                needs_review, explanation_json, is_human_checked,
+                final_relevance_label, final_content_type,
                 final_emotion_label, final_frame_label, final_platform_role,
                 final_reshape_type, classified_time
             )
             VALUES (
                 :classification_id, :material_id, :relevance_label, :content_type,
                 :emotion_label, :frame_label, :platform_role, :reshape_type, :confidence,
-                :is_human_checked, :final_relevance_label, :final_content_type,
+                :needs_review, :explanation_json, :is_human_checked,
+                :final_relevance_label, :final_content_type,
                 :final_emotion_label, :final_frame_label, :final_platform_role,
                 :final_reshape_type, :classified_time
             )
@@ -122,7 +133,7 @@ def get_unchecked_classifications() -> pd.DataFrame:
 
 
 def update_human_review(classification_id: str, final_labels: Dict[str, str]) -> None:
-    payload = {"classification_id": classification_id, **final_labels}
+    payload = {"classification_id": classification_id, "reviewed_time": get_current_time(), **final_labels}
     with get_connection() as conn:
         conn.execute(
             """
@@ -134,7 +145,8 @@ def update_human_review(classification_id: str, final_labels: Dict[str, str]) ->
                 final_emotion_label = :final_emotion_label,
                 final_frame_label = :final_frame_label,
                 final_platform_role = :final_platform_role,
-                final_reshape_type = :final_reshape_type
+                final_reshape_type = :final_reshape_type,
+                reviewed_time = :reviewed_time
             WHERE classification_id = :classification_id
             """,
             payload,
@@ -211,6 +223,8 @@ def load_joined_dataset() -> pd.DataFrame:
             c.platform_role,
             c.reshape_type,
             c.confidence,
+            c.needs_review,
+            c.explanation_json,
             c.is_human_checked,
             COALESCE(c.final_relevance_label, c.relevance_label) AS final_relevance_label,
             COALESCE(c.final_content_type, c.content_type) AS final_content_type,
@@ -230,14 +244,19 @@ def load_joined_dataset() -> pd.DataFrame:
 def export_all() -> dict:
     from modules.exporter import (
         export_classifications_to_excel,
+        export_manifest,
         export_materials_to_excel,
         export_reviewed_dataset,
         export_texts_for_cluster,
+        make_export_stamp,
     )
 
-    return {
-        "materials": export_materials_to_excel(),
-        "classifications": export_classifications_to_excel(),
-        "reviewed_dataset": export_reviewed_dataset(),
-        "texts_for_cluster": export_texts_for_cluster(),
+    stamp = make_export_stamp()
+    paths = {
+        "materials": export_materials_to_excel(stamp),
+        "classifications": export_classifications_to_excel(stamp),
+        "reviewed_dataset": export_reviewed_dataset(stamp),
+        "texts_for_cluster": export_texts_for_cluster(stamp),
     }
+    paths["manifest"] = export_manifest(paths, stamp)
+    return paths

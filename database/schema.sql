@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS classifications (
     platform_role TEXT,
     reshape_type TEXT,
     confidence REAL,
+    needs_review INTEGER DEFAULT 0,
+    explanation_json TEXT,
     is_human_checked INTEGER DEFAULT 0,
     final_relevance_label TEXT,
     final_content_type TEXT,
@@ -32,7 +34,8 @@ CREATE TABLE IF NOT EXISTS classifications (
     final_platform_role TEXT,
     final_reshape_type TEXT,
     classified_time TEXT,
-    FOREIGN KEY(material_id) REFERENCES materials(material_id)
+    reviewed_time TEXT,
+    FOREIGN KEY(material_id) REFERENCES materials(material_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS ocr_results (
@@ -42,7 +45,7 @@ CREATE TABLE IF NOT EXISTS ocr_results (
     recognized_text TEXT,
     corrected_text TEXT,
     ocr_time TEXT,
-    FOREIGN KEY(material_id) REFERENCES materials(material_id)
+    FOREIGN KEY(material_id) REFERENCES materials(material_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS label_dictionary (
@@ -52,3 +55,9 @@ CREATE TABLE IF NOT EXISTS label_dictionary (
     keywords TEXT,
     description TEXT
 );
+
+CREATE INDEX IF NOT EXISTS idx_materials_upload_time ON materials(upload_time);
+CREATE INDEX IF NOT EXISTS idx_materials_platform ON materials(platform);
+CREATE INDEX IF NOT EXISTS idx_classifications_material_id ON classifications(material_id);
+CREATE INDEX IF NOT EXISTS idx_classifications_checked ON classifications(is_human_checked);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_label_dictionary_type_name ON label_dictionary(label_type, label_name);

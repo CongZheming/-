@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 
@@ -21,7 +22,7 @@ from database.db_manager import (
     load_materials,
     update_human_review,
 )
-from modules.ocr_processor import extract_text_from_image
+from modules.ocr_processor import extract_ocr_result_from_image
 from modules.rule_classifier import LABEL_OPTIONS, classify_all
 from modules.text_cleaner import clean_text
 from modules.utils import SCREENSHOTS_DIR, ensure_dirs, generate_id, get_current_time
@@ -30,6 +31,14 @@ from modules.utils import SCREENSHOTS_DIR, ensure_dirs, generate_id, get_current
 PLATFORMS = ["微博", "小红书", "知乎", "豆瓣", "抖音", "其他"]
 SOURCE_TYPES = ["帖文", "评论", "转发", "观察记录", "访谈摘录"]
 INPUT_METHODS = {"文本粘贴": "text", "截图上传": "screenshot"}
+CLASSIFICATION_FIELDS = [
+    ("relevance_label", "议题相关性"),
+    ("content_type", "内容类型"),
+    ("emotion_label", "情绪标签"),
+    ("frame_label", "话语框架"),
+    ("platform_role", "平台角色"),
+    ("reshape_type", "议题重塑类型"),
+]
 
 
 def bootstrap() -> None:
@@ -55,6 +64,46 @@ def build_classification(material: dict) -> dict:
     }
 
 
+def _load_explanations(value) -> dict:
+    if isinstance(value, dict):
+        return value
+    if value is None:
+        return {}
+    if pd.isna(value):
+        return {}
+    if not value:
+        return {}
+    try:
+        data = json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _display_explanations(explanations: dict) -> None:
+    if not explanations:
+        return
+    with st.expander("规则命中证据", expanded=False):
+        for field, label_text in CLASSIFICATION_FIELDS:
+            detail = explanations.get(field, {})
+            matched = detail.get("matched_keywords") or []
+            candidate_scores = detail.get("candidate_scores") or {}
+            st.markdown(f"**{label_text}：{detail.get('label', '未知')}**")
+            st.caption(f"分数：{detail.get('score', 0)}；命中词：{'、'.join(matched) if matched else '无'}")
+            if candidate_scores:
+                st.json(candidate_scores, expanded=False)
+
+
+def _display_classification_result(result: dict) -> None:
+    rows = []
+    for field, label_text in CLASSIFICATION_FIELDS:
+        rows.append({"维度": label_text, "推荐标签": result.get(field)})
+    rows.append({"维度": "置信度", "推荐标签": result.get("confidence")})
+    rows.append({"维度": "需要复核", "推荐标签": "是" if result.get("needs_review") else "否"})
+    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+    _display_explanations(result.get("explanations", {}))
+
+
 def page_input() -> None:
     st.header("材料上传 / 文本录入")
     platform = st.selectbox("平台", PLATFORMS)
@@ -72,9 +121,13 @@ def page_input() -> None:
         uploaded_file = st.file_uploader("上传截图", type=["png", "jpg", "jpeg", "webp"])
         if uploaded_file:
             screenshot_path = save_uploaded_screenshot(uploaded_file)
-            raw_text = extract_text_from_image(screenshot_path)
-            if not raw_text:
-                st.info("未检测到可用 OCR 依赖或识别结果为空，请在下方手动补充文本。")
+            ocr_result = extract_ocr_result_from_image(screenshot_path)
+            raw_text = ocr_result.text
+            if ocr_result.success:
+                if ocr_result.confidence is not None:
+                    st.caption(f"OCR 平均置信度：{ocr_result.confidence}")
+            else:
+                st.info(f"{ocr_result.error or 'OCR 暂不可用'}。请在下方手动补充文本。")
             raw_text = st.text_area("OCR 识别文本 / 手动修正文本", value=raw_text, height=220)
 
     cleaned = clean_text(raw_text)
@@ -127,7 +180,7 @@ def page_classify() -> None:
 
     result = classify_all(material["clean_text"] or "", material["platform"] or "", material["source_type"] or "")
     st.subheader("系统推荐标签")
-    st.json(result, expanded=True)
+    _display_classification_result(result)
 
     if st.button("保存推荐分类结果", type="primary"):
         insert_classification(
@@ -167,12 +220,14 @@ def page_review() -> None:
                     "platform_role": row["platform_role"],
                     "reshape_type": row["reshape_type"],
                     "confidence": row["confidence"],
+                    "needs_review": "是" if row.get("needs_review") else "否",
                 }
             ]
         ),
         hide_index=True,
         use_container_width=True,
     )
+    _display_explanations(_load_explanations(row.get("explanation_json")))
 
     final_labels = {}
     for field, label in [
